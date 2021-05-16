@@ -1,0 +1,95 @@
+# i3 config file (v4)
+
+font pango:§fontname§ §fontsize§px
+
+focus_follows_mouse no
+
+# custom dock workaround
+set $dw 8
+workspace 1 gaps left $dw
+floating_minimum_size $dw x $dw
+for_window [title="aldos-dock" window_type="splash"] floating enable, sticky enable, border none, resize set $dw 0, move position 0 0
+
+# window rules
+for_window [instance="qemu"] floating enable, move position $dw 0
+
+client.background §color00§
+
+#                       title     title     title     border    window
+# class                 border    backgr.   text      indictr   child_border
+client.focused          §color11§ §color11§ §color00§ §color11§ §color11§
+client.unfocused        §color07§ §color07§ §color00§ §color07§ §color07§
+
+set $bw 1
+default_border pixel $bw
+default_floating_border pixel $bw
+
+# use Mouse+Mod4 to drag floating windows to their wanted position
+floating_modifier Mod4
+
+# start apps
+bindsym Mod4+Return exec urxvt
+bindsym Mod4+space exec --no-startup-id aldos-launcher
+
+# kill focused window
+bindsym Mod4+Shift+q kill
+
+# change focus
+bindsym Mod4+Left focus left
+bindsym Mod4+Down focus down
+bindsym Mod4+Up focus up
+bindsym Mod4+Right focus right
+
+# move focused window
+bindsym Mod4+Shift+Left move left
+bindsym Mod4+Shift+Down move down
+bindsym Mod4+Shift+Up move up
+bindsym Mod4+Shift+Right move right
+
+# split in horizontal orientation
+bindsym Mod4+h split h
+
+# split in vertical orientation
+bindsym Mod4+v split v
+
+# enter fullscreen mode for the focused container
+bindsym Mod4+f fullscreen toggle
+
+# change container layout (stacked, tabbed, toggle split)
+bindsym Mod4+s layout stacking
+bindsym Mod4+w layout tabbed
+bindsym Mod4+e layout toggle split
+
+# toggle tiling / floating
+bindsym Mod4+Shift+t floating toggle
+
+# change focus between tiling / floating windows
+#bindsym Mod4+space focus mode_toggle
+
+# focus the parent container
+bindsym Mod4+a focus parent
+
+# focus the child container
+#bindsym Mod4+d focus child
+
+# reload the configuration file
+bindsym Mod4+Shift+c reload
+# restart i3 inplace (preserves your layout/session, can be used to upgrade i3)
+bindsym Mod4+Shift+r restart
+# exit i3 (logs you out of your X session)
+bindsym Mod4+Shift+e exec "i3-nagbar -t warning -m 'You pressed the exit shortcut. Do you really want to exit i3? This will end your X session.' -B 'Yes, exit i3' 'i3-msg exit'"
+
+# resize window (you can also use the mouse for that)
+mode "resize" {
+	# These bindings trigger as soon as you enter the resize mode
+	bindsym Left        resize shrink width 10 px or 10 ppt
+	bindsym Down        resize grow height 10 px or 10 ppt
+	bindsym Up          resize shrink height 10 px or 10 ppt
+	bindsym Right       resize grow width 10 px or 10 ppt
+	# back to normal: Enter or Escape or Mod4+r
+	bindsym Return mode "default"
+	bindsym Escape mode "default"
+	bindsym Mod4+r mode "default"
+}
+
+bindsym Mod4+r mode "resize"

@@ -1,0 +1,20 @@
+#!/bin/bash
+
+build(){
+	if [[ ! -e /etc/setvtrgb.theme ]]
+	then
+		warning "/etc/setvtrgb.theme not found"
+		exit 0
+	fi
+
+	cp /etc/setvtrgb.theme "$BUILDROOT/setvtrgb.theme"
+
+	add_runscript
+	add_binary "/usr/bin/setvtrgb"
+}
+
+help(){
+	cat <<-EOH
+		set console colors with setvtrgb and /etc/setvtrgb.theme
+	EOH
+}

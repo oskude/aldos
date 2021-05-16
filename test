@@ -1,0 +1,16 @@
+#!/usr/bin/bash
+
+# TODO: mount this repo in guest?
+
+if [[ $# -lt 1 ]]; then
+	echo "usage: test <raw disk img> [<raw disk img> ...]"
+	exit
+fi
+
+for disk in "$@"; do
+	opdisks+="-drive format=raw,file=$disk "
+done
+
+qemu-system-x86_64 \
+	-drive if=pflash,format=raw,readonly,file=/usr/share/ovmf/x64/OVMF_CODE.fd \
+	-enable-kvm -cpu host -m 1G -snapshot $opdisks

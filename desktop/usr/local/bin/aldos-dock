@@ -1,0 +1,127 @@
+#!/usr/bin/gjs
+
+// TODO: get colors from /etc/aldos/theme.json? (but they dont have alpha!)
+// TODO: handle window resize... you know, restarting the app is fast enough ;P
+// TODO: i would like to know if something (eg. my bad code) is spamming new processes
+// /proc/sys/kernel/pid_max
+
+imports.gi.versions.Gtk = '3.0';
+const { Gtk, Gdk, Gio, GLib } = imports.gi;
+const ByteArray = imports.byteArray;
+
+function get_num_cpus () {
+	let cpu_file = Gio.File.new_for_path("/proc/topstats/cpu");
+	let [code, data] = cpu_file.load_contents(null);
+	// TODO: can we read binary data?
+	let lines = ByteArray.toString(data).split("\n");
+	// TODO: do/how we unref the file?
+	//cpu_file.unref();
+	return lines.length - 1;
+}
+
+function create_window () {
+	let win = new Gtk.Window({
+		title: 'aldos-dock',
+		type: Gtk.WindowType.TOPLEVEL,
+		//type_hint: Gdk.WindowTypeHint.DOCK, // https://github.com/i3/i3/issues/1129
+		type_hint: Gdk.WindowTypeHint.SPLASHSCREEN,
+		default_width: WIN_WIDTH,
+		default_height: WIN_HEIGHT,
+		resizable: true,
+	});
+	let mon = win.screen.get_display().get_monitor_at_point(win.x, win.y);
+	WIN_HEIGHT = mon.get_geometry().height;
+	BAR_HEIGHT = Math.round(WIN_HEIGHT / (NUM_CPUS + 1));
+	win.set_size_request(WIN_WIDTH, WIN_HEIGHT);
+	let area = new Gtk.DrawingArea();
+	area.set_size_request(WIN_WIDTH, WIN_HEIGHT);
+	win.add(area);
+	win.connect("destroy", () => { Gtk.main_quit(); });
+	win.show_all();
+	// TODO: were supposed to use get_cairo_context() but i dont know how...
+	return Gdk.cairo_create(area.get_window());
+}
+
+function draw_cpu () {
+	let [code, data] = CPU_FILE.load_contents(null);
+	let lines = ByteArray.toString(data).split("\n");
+	// fade out previous drawing
+	CCTX.setSourceRGBA(0, 0, 0, 0.2);
+	CCTX.rectangle(0, BAR_HEIGHT, WIN_WIDTH, BAR_HEIGHT * NUM_CPUS);
+	CCTX.fill();
+	// draw data bars
+	for (let cpu_nr = 0; cpu_nr < lines.length; cpu_nr++) {
+		let cd = lines[cpu_nr];
+		if (!cd) continue;
+		let [jiff_total, jiff_used] = cd.split(" ");
+		jiff_total = parseInt(jiff_total);
+		jiff_used = parseInt(jiff_used);
+		let cpu_usage = jiff_used - JIFF_USEDS[cpu_nr];
+		cpu_usage /= jiff_total - JIFF_TOTALS[cpu_nr];
+		JIFF_TOTALS[cpu_nr] = jiff_total;
+		JIFF_USEDS[cpu_nr]  = jiff_used;
+		if (cpu_usage < 1.0) {
+			CCTX.setSourceRGBA(0, 1, 0, 0.2);
+		} else {
+			CCTX.setSourceRGBA(1, 0, 0, 0.2);
+		}
+		CCTX.rectangle(
+			0,
+			BAR_HEIGHT * (cpu_nr + 2),
+			WIN_WIDTH,
+			- BAR_HEIGHT * cpu_usage
+		);
+		CCTX.fill();
+	}
+	return GLib.SOURCE_CONTINUE;
+}
+
+function draw_mem () {
+	let [code, data] = MEM_FILE.load_contents(null);
+	let [mem_total, mem_used, mem_cached] = ByteArray.toString(data).split("\n")[0].split(" ");
+	// clear out previous drawing
+	CCTX.setSourceRGBA(0, 0, 0, 1);
+	CCTX.rectangle(0, 0, WIN_WIDTH, BAR_HEIGHT);
+	CCTX.fill();
+	mem_total  = parseInt(mem_total);
+	mem_used   = parseInt(mem_used);
+	mem_cached = parseInt(mem_cached);
+	// mem used
+	let mem_used_h = BAR_HEIGHT * (mem_used / mem_total);
+	CCTX.setSourceRGBA(0.1, 0.5, 1, 0.8);
+	CCTX.rectangle(
+		0,
+		BAR_HEIGHT,
+		WIN_WIDTH,
+		-mem_used_h
+	)
+	CCTX.fill();
+	// mem cached
+	CCTX.setSourceRGBA(0, 0, 0, 0.5);
+	CCTX.rectangle(
+		0,
+		BAR_HEIGHT - mem_used_h,
+		WIN_WIDTH,
+		mem_used_h * (mem_cached / mem_used)
+	)
+	CCTX.fill();
+	return GLib.SOURCE_CONTINUE;
+}
+
+Gtk.init(null);
+
+var   WIN_WIDTH  = 8;
+var   WIN_HEIGHT = Gdk.Screen.get_default().get_height();
+const NUM_CPUS   = get_num_cpus();
+var   BAR_HEIGHT = Math.round(WIN_HEIGHT / (NUM_CPUS + 1));
+const CCTX       = create_window();
+const CPU_FILE   = Gio.File.new_for_path("/proc/topstats/cpu");
+const MEM_FILE   = Gio.File.new_for_path("/proc/topstats/mem");
+
+var JIFF_TOTALS = [];
+var JIFF_USEDS  = [];
+
+GLib.timeout_add(GLib.PRIORITY_DEFAULT, 250,  draw_cpu);
+GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, draw_mem);
+
+Gtk.main();

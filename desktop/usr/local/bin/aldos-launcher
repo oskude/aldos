@@ -1,0 +1,4 @@
+#!/usr/bin/bash
+# afaik, dmenu has no system config file, so...
+# TODO: colors
+dmenu_run -fn '§fontname§:pixelsize=§fontsize§'

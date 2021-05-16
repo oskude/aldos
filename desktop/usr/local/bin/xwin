@@ -1,0 +1,30 @@
+#!/usr/bin/bash
+# minimal startx, for single server at :0, run from tty1
+
+mcookie=$(/usr/bin/mcookie)
+
+# x server auth
+authfile=$(mktemp -p /tmp xserverauth.XXXXXXXXXX)
+trap "rm -f '$authfile'" HUP INT QUIT ILL TRAP KILL BUS TERM
+xauth -n -q -f "$authfile" <<-EOF
+	add :0 . $mcookie
+EOF
+
+# x client auth
+export XAUTHORITY=$HOME/.xauthority
+xauth -n -q <<-EOF
+	add :0 . $mcookie
+EOF
+
+# start x
+xinit /etc/X11/xinit/xinitrc -- /etc/X11/xinit/xserverrc :0 vt1 -auth $authfile
+retval=$?
+
+# cleanup
+rm -f "$authfile"
+# TODO: do we need deallocvt?
+if command -v deallocvt > /dev/null 2>&1; then
+	deallocvt
+fi
+
+exit $retval

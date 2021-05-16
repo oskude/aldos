@@ -1,0 +1,5 @@
+#!/bin/sh
+xrdb /etc/X11/xinit/xresources
+xsetroot -solid $(xrdb -query | grep color0 | cut -f 2)
+aldos-dock &
+exec i3

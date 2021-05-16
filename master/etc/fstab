@@ -1,0 +1,2 @@
+PARTLABEL=aldos_master_boot /boot vfat rw,noatime 1 2
+PARTLABEL=aldos_master_root /     ext4 rw,noatime 0 1

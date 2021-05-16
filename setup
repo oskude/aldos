@@ -1,0 +1,487 @@
+#!/usr/bin/bash
+
+function Abort     { echo "$1"; exit 1; }
+function Error     { Abort "setup error: $1"; }
+function IsThere   { [[ -e "$1" ]]; }
+function IsDir     { [[ -d "$1" ]]; }
+function IsFile    { [[ -f "$1" ]]; }
+function IsDisk    { [[ -b "$1" ]]; }
+function IsEmpty   { [[ -z "$1" ]]; }
+function IsSymlink { [[ -L "$1" ]]; }
+function ShowRun   { echo "> $*"; $@; }
+
+# TODO: there should be a simpler tool for this...
+function IsTextFile {
+	case $(file -b --mime-type "$1") in
+		text/* \
+		| application/csv \
+		| application/json)
+			return 0
+		;;
+	esac
+	return 1
+}
+
+function Confirm {
+	local text="$1"
+	local reply
+	read -n 1 -rsp "$text (y/N)? " reply
+	echo "$reply"
+	[[ $reply =~ ^[yY]$ ]] && return 0
+	return 1
+}
+
+function CheckArguments {
+	local -n arg_template="$1"
+	local -n arg_system="$2"
+	local -n sys_file="$3"
+	local -n sys_disk="$4"
+	local -n sys_dire="$5"
+
+	IsEmpty "$arg_template" || IsEmpty "$arg_system" \
+		&& Abort "usage: setup <template dir> <system file|disk|dir>"
+
+	IsDir "$arg_template" \
+		|| Error "not a directory: $arg_template"
+
+	arg_template=$(realpath "$arg_template")
+	arg_system=$(realpath "$arg_system")
+
+	if   IsFile "$arg_system"; then sys_file="$arg_system";
+	elif IsDisk "$arg_system"; then sys_disk="$arg_system";
+	elif IsDir  "$arg_system"; then sys_dire="$arg_system";
+	else
+		Error "not a file, disk nor directory: $arg_system"
+	fi
+}
+
+### loop file functions #######################################################
+
+function SetupLoopFile {
+	local file="$1"
+	local -n dev="$2"
+
+	dev=$(losetup --associated $file)
+	if [[ -n "$dev" ]]; then
+		dev=${dev%%:*}
+	else
+		dev=$(losetup --find) || Error "No free loop device found."
+		ShowRun losetup $dev $file || Error "Could not attach loop device."
+		ShowRun partprobe $dev || Error "Could not probe partition info."
+	fi
+
+	echo "OK: $dev"
+}
+
+### disk functions ############################################################
+
+function GetDiskPartitions {
+	local disk="$1"
+	local -n out="$2"
+	local isnumber='^[0-9]+$'
+
+	local IFS=";"
+	while read -r line; do
+		local IFS=":"
+		cell=($line)
+		if [[ ${cell[0]} =~ $isnumber ]]; then
+			local num=${cell[0]}
+			local siz=${cell[3]}
+			local fmt=${cell[4]}
+			local lbl=${cell[5]}
+			out+=("$num $lbl $fmt $siz")
+		fi
+	done < <(parted --machine "$disk" print)
+}
+
+function GetTemplatePartitions {
+	local template="$1"
+	local -n output="$2"
+	local file="$template/etc/fstab"
+	local nr=1
+	local line
+	[[ ! -e "$file" ]] && Error "disk template $file not found."
+	while read -r line
+	do
+		[[ -z "$line" ]] && break
+		[[ ! "$line" =~ ^PARTLABEL ]] && continue
+		local -a field=($line)
+		local lbl=${field[0]##*=}
+		local mnt=${field[1]}
+		local fmt=${field[2]}
+		local siz=${field[4]}
+		output+=("$nr $lbl $fmt $siz $mnt")
+		((nr++))
+	done < "$file"
+}
+
+function SetupPartitions {
+	local template="$1"
+	local disk="$2"
+	local -a dskparts
+	local -a tplparts
+
+	GetTemplatePartitions "$template" "tplparts"
+	GetDiskPartitions "$disk" "dskparts"
+
+	for i in "${!tplparts[@]}"; do
+		local tplpart=(${tplparts[i]})
+		local dskpart=(${dskparts[i]})
+		local n=${tplpart[0]}
+		local label=${tplpart[1]}
+		local size=${tplpart[3]}
+		local type="8300"
+		[[ $mnt == "/boot" ]] && type="EF00"
+		[[ $mnt == "/" ]]     && type="8304"
+
+		if [[ "$label" != "${dskpart[1]}" ]]
+		then
+			IsEmpty "${dskpart[1]}" \
+				|| Error "wrong partition exists, please zap the disk or use another..."
+			if Confirm "CREATE: $disk partition $n $label"; then
+				ShowRun sgdisk "$disk" -n $n:0:+${size}GB -t $n:$type -c $n:$label \
+					|| Error "could not create partition"
+				ShowRun partprobe $disk || Error "could not probe partition"
+			else
+				Error "aborted by user"
+			fi
+		fi
+	done
+}
+
+function SetupFilesystems {
+	local template="$1"
+	local disk="$2"
+	local -a dskparts
+	local -a tplparts
+
+	GetTemplatePartitions "$template" "tplparts"
+	GetDiskPartitions "$disk" "dskparts"
+
+	for i in "${!tplparts[@]}"; do
+		local tplpart=(${tplparts[i]})
+		local dskpart=(${dskparts[i]})
+		local n=${tplpart[0]}
+		local format=${tplpart[2]}
+		[[ "${dskpart[2]}" = "fat32" ]] && dskpart[2]="vfat"
+		if [[ "$format" = "${dskpart[2]}" ]]
+		then
+			echo "OK: ${dskparts[i]}"
+		else
+			local prefix=""
+			[[ "$disk" =~ ^/dev/loop* ]] && prefix="p"
+			local partpath="${disk}${prefix}${n}"
+
+			if Confirm "FORMAT: $partpath"; then
+				ShowRun mkfs.$format $partpath || Error "could not format partition"
+				ShowRun partprobe $disk || Error "could not probe partition"
+			fi
+		fi
+	done
+}
+
+function SetupMounts {
+	local template="$1"
+	local disk="$2"
+	local -n sysdir="$3"
+	local -a tplparts
+	local mntdir=$(mktemp --directory --tmpdir=/tmp aldos_XXXX) \
+		|| Error "could not create mount dir in /tmp."
+
+	GetTemplatePartitions "$template" "tplparts"
+
+	# find mounts
+	for i in "${!tplparts[@]}"; do
+		local tplpart=(${tplparts[i]})
+		local n=${tplpart[0]}
+		local mnt=${tplpart[4]}
+		local prefix=""
+		[[ "$disk" =~ ^/dev/loop* ]] && prefix="p"
+		if findmnt "${disk}${prefix}${n}"; then
+			Error "already mounted: ${disk}${prefix}${n}"
+		fi
+		if findmnt "$mntdir"; then
+			Error "already mounted: $mntdir"
+		fi
+	done
+
+	# mount root
+	for i in "${!tplparts[@]}"; do
+		local tplpart=(${tplparts[i]})
+		local n=${tplpart[0]}
+		local mnt=${tplpart[4]}
+		local prefix=""
+		[[ "$disk" =~ ^/dev/loop* ]] && prefix="p"
+		if [[ "$mnt" = "/" ]]; then
+			local part="${disk}${prefix}${n}"
+			local mount="${mntdir}${mnt}"
+			ShowRun mount $part $mount || Error "failed to mount"
+		fi
+	done
+
+	# mount rest
+	for i in "${!tplparts[@]}"; do
+		local tplpart=(${tplparts[i]})
+		local n=${tplpart[0]}
+		local mnt=${tplpart[4]}
+		local prefix=""
+		[[ "$disk" =~ ^/dev/loop* ]] && prefix="p"
+		if [[ "$mnt" != "/" ]]; then
+			local part="${disk}${prefix}${n}"
+			local mount="${mntdir}${mnt}"
+			if ! IsThere "$mount"; then
+				ShowRun mkdir -p $mount || Error "failed to create dir"
+			fi
+			ShowRun mount $part $mount || Error "failed to mount"
+		fi
+	done
+
+	sysdir="$mntdir"
+}
+
+### dir functions #############################################################
+
+function ParseTheme {
+	local theme_file="$1"
+	local -n output="$2"
+	local theme_keyval='"([^"]+)":\s*"*([^",]+)"*'
+	local hex_split='#([[:xdigit:]]{2})([[:xdigit:]]{2})([[:xdigit:]]{2})'
+	local line key val
+
+	while read line
+	do
+		if [[ $line =~ $theme_keyval ]]
+		then
+			key=${BASH_REMATCH[1]}
+			val=${BASH_REMATCH[2]}
+			output[$key]=$val
+			if [[ $val =~ $hex_split ]]
+			then
+				output[${key}r]=$((16#${BASH_REMATCH[1]}))
+				output[${key}g]=$((16#${BASH_REMATCH[2]}))
+				output[${key}b]=$((16#${BASH_REMATCH[3]}))
+			fi
+		fi
+	done < "$theme_file"
+}
+
+function GetFileContent {
+	local -n content="$1"
+	local file="$2"
+	local IFS=''
+
+	read -rd '' content < "$file"
+}
+
+function GetResolvedFileContent {
+	local -n vars="$1"
+	local -n content="$2"
+	local file="$3"
+	local key val pat
+	local IFS=''
+
+	read -rd '' content < "$file"
+
+	for key in "${!vars[@]}"; do
+		val="${vars[$key]}"
+		pat="§${key}§"
+		content="${content//$pat/$val}"
+	done
+}
+
+function FsCanSymlink {
+	local path="/$1"
+	until [[ -e "$path" ]]; do
+		path="${path%/*}"
+		if [[ -z "$path" ]]; then
+			return 1
+		fi
+	done
+	if [[ $(stat -f -c %T "$path") = "msdos" ]]; then
+		return 1
+	else
+		return 0
+	fi
+}
+
+function FileModeSame {
+	FsCanSymlink "$2" || return 0
+	[[ $(stat -c '%a' "$1") -eq $(stat -c '%a' "$2") ]]
+}
+
+function AskContentToFile {
+	local -n upcontent="$1"
+	local file="$2"
+	local tplfile="$3"
+
+	if Confirm "UPDATE: $file"; then
+		mkdir -p ${file%/*} || Error "could not create child dirs"
+		printf "%s" "$upcontent" > "$file" || Error "could not create file"
+		chmod --reference="$tplfile" "$file" || Error "could not set file mode"
+	fi
+}
+
+function AskSymlinkFile {
+	local file="$1"
+	local link="$2"
+
+	if Confirm "UPDATE: $file"; then
+		mkdir -p ${file%/*} || Error "could not create child dirs"
+		ln -sf "$link" "$file" || Error "could not symlink"
+	fi
+}
+
+function SymlinkWorkaround {
+	local file="$1"
+	local link="$2"
+
+	if cmp -s "$file" "$link"; then
+		echo "OK: $file"
+	else
+		if Confirm "WORKAROUND: $file"; then
+			mkdir -p ${file%/*} || Error "could not create child dirs"
+			cp "$link" "$file" || Error "could not copy file"
+		fi
+	fi
+}
+
+function SetupFiles {
+	local template="$1"
+	local system="$2"
+	local themefile="$template/theme.json"
+	local -A theme
+	local file tplfile sysfile tpllink syslink
+
+	IsFile "$themefile" \
+		&& ParseTheme "$themefile" "theme"
+
+	for file in $(find "$template" -mindepth 2 -type f,l -printf '%P\n'); do
+		tplfile="$template/$file"
+		sysfile="$system/$file"
+		tplcontent=""
+		syscontent=""
+		if IsTextFile "$tplfile"; then
+			GetResolvedFileContent "theme" "tplcontent" "$tplfile"
+			if IsTextFile "$sysfile"; then
+				GetFileContent "syscontent" "$sysfile"
+				if [[ "$tplcontent" = "$syscontent" ]]; then
+					if FileModeSame "$tplfile" "$sysfile"; then
+						echo "OK: $file"
+					else
+						AskContentToFile "tplcontent" "$sysfile" "$tplfile"
+					fi
+				else
+					AskContentToFile "tplcontent" "$sysfile" "$tplfile"
+				fi
+			else
+				AskContentToFile "tplcontent" "$sysfile" "$tplfile"
+			fi
+		elif IsSymlink "$tplfile"; then
+			tpllink=$(readlink "$tplfile")
+			if IsSymlink "$sysfile"; then
+				syslink=$(readlink "$sysfile")
+				if [[ "$tpllink" = "$syslink" ]]; then
+					echo "OK: $file"
+				else
+					AskSymlinkFile "$sysfile" "$tpllink"
+				fi
+			else
+				if FsCanSymlink "$sysfile"; then
+					AskSymlinkFile "$sysfile" "$tpllink"
+				else
+					SymlinkWorkaround "$sysfile" "$tpllink"
+				fi
+			fi
+		else
+			Error "unsupported file type: $file"
+		fi
+	done
+}
+
+function SetupPackages {
+	local template="$1"
+	local system="$2"
+	local file="$template/readme.md"
+	local regex='pkgs:[^`]*`([^`]+)'
+	local -a pkgs=""
+	local args="-i -c -M"
+	local line pkg
+
+	while read -r line; do
+		if [[ $line =~ $regex ]]; then
+			for pkg in ${BASH_REMATCH[1]}; do
+				if [[ ! "${pkgs[@]}" =~ " $pkg " ]]; then
+					pkgs+=($pkg)
+				fi
+			done
+		fi
+	done < "$file"
+
+	if IsThere "$template/etc/pacman.conf"; then
+		args="${args} -C $template/etc/pacman.conf"
+	fi
+
+	ShowRun pacstrap $args "$system" --needed -u ${pkgs[@]}
+}
+
+function SetupCommands {
+	local template="$1"
+
+	for cmdfile in $(find "$template" -mindepth 1 -maxdepth 1 -name '*.setup.sh')
+	do
+		if Confirm "RUN: $cmdfile"; then
+			source "$cmdfile"
+		fi
+	done
+}
+
+### cleanup functions #########################################################
+
+function Cleanup {
+	echo "Cleanup"
+	if ! IsEmpty "$SYSdisk" && ! IsEmpty "$SYSdir"; then
+		if findmnt -n "$SYSdir"; then
+			ShowRun umount -R "$SYSdir"
+		fi
+	fi
+	if ! IsEmpty "$SYSfile"; then
+		local dev=$(losetup --associated "$SYSfile")
+		if ! IsEmpty "$dev"; then
+			dev=${dev%%:*}
+			ShowRun losetup -d "$dev"
+		fi
+	fi
+	if [[ "$SYSdir" =~ ^/tmp/ ]]; then
+		ShowRun rmdir "$SYSdir"
+	fi
+}
+
+### main ######################################################################
+
+declare ARGtemplate="$1"
+declare ARGsystem="$2"
+declare SYSfile=""
+declare SYSdisk=""
+declare SYSdir=""
+
+CheckArguments "ARGtemplate" "ARGsystem" "SYSfile" "SYSdisk" "SYSdir"
+trap Cleanup EXIT
+
+if ! IsEmpty "$SYSfile"; then
+	echo "Setup file $SYSfile"
+	SetupLoopFile "$SYSfile" "SYSdisk"
+fi
+
+if ! IsEmpty "$SYSdisk"; then
+	echo "Setup disk $SYSdisk"
+	SetupPartitions  "$ARGtemplate" "$SYSdisk"
+	SetupFilesystems "$ARGtemplate" "$SYSdisk"
+	SetupMounts      "$ARGtemplate" "$SYSdisk" "SYSdir"
+fi
+
+if ! IsEmpty "$SYSdir"; then
+	echo "Setup dir $SYSdir"
+	SetupPackages "$ARGtemplate" "$SYSdir"
+	SetupFiles    "$ARGtemplate" "$SYSdir"
+	SetupCommands "$ARGtemplate"
+fi

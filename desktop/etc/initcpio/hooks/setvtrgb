@@ -1,0 +1,10 @@
+#!/usr/bin/ash
+
+run_earlyhook(){
+	if [ -e /setvtrgb.theme ]
+	then
+		setvtrgb /setvtrgb.theme
+	else
+		msg "/setvtrgb.theme not found."
+	fi
+}

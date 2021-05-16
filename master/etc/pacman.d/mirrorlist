@@ -1,0 +1,2 @@
+# TODO: why is there no mirrors.archlinux.org?
+Server = http://mirrors.kernel.org/archlinux/$repo/os/$arch
