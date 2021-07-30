@@ -2,16 +2,6 @@
 
 **Adventures in Linux Dream Operating Setup, for [fun](master/readme.md) and [passion](./desktop/readme.md).**
 
-dear reader,
-
-this repo is not yet ready for public release - nor have i completely migrated to it, but thanks to money still ruling the world, i feel like shit again... so in case i won't get back my happiness this time, back it up to the internet...
-
-and while i'm at it, here's some [horribly broken beats](https://osku.de/music/guten_morgen_sonntag.mp3) to fit the times...
-
-`AARGH: MONEY-UNDERFLOW DETECTED, ATTIC TAINTED!`
-
-<br>
-
 ```
 ┌──────────────┐                    ┏━━━━━━━━━━━━━━━━━┓
 │ Template Dir │  ┌──["dump"]──────▶┃ System Disk     ┃
@@ -36,7 +26,7 @@ a template directory is a plain "linux directory" (with file modes and symlinks)
 
 ## `etc/fstab`
 
-so [fstab](https://man.archlinux.org/man/fstab.5) contains all the infos i need to setup a partition, except one, the size. now, i've been using linux for over a decade, and have _never_ seen/heard the fifth field ([fs_freq](https://man.archlinux.org/man/fstab.5)/[dump](https://man.archlinux.org/man/dump.8.en)) used, so _joink_... 
+so [fstab](https://man.archlinux.org/man/fstab.5) contains all the infos i need to setup a partition, except one, the size. now, i've been using linux for over a decade, and have _never_ seen/heard the fifth field ([fs_freq](https://man.archlinux.org/man/fstab.5)/[dump](https://man.archlinux.org/man/dump.8.en)) used, so _joink_...
 
 `setup` uses following fields from `etc/fstab`:
 
